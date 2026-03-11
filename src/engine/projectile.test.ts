@@ -91,8 +91,8 @@ describe('createProjectile', () => {
     const power = 50;
     const proj = createProjectile(tank, 45, power, WeaponType.Sniper);
 
-    // speed = 50 * 1.12 * 1.5 = 84
-    const speed = power * 1.12 * 1.5;
+    // speed = 50 * 1.12 * 1.3 (Sniper speedMultiplier)
+    const speed = power * 1.12 * 1.3;
     const angle = Math.PI / 4;
     expect(proj.velocity.vx).toBeCloseTo(speed * Math.cos(angle), 5);
     expect(proj.velocity.vy).toBeCloseTo(speed * Math.sin(angle), 5);
@@ -103,7 +103,7 @@ describe('createProjectile', () => {
     const power = 50;
     const proj = createProjectile(tank, 45, power, WeaponType.Heavy);
 
-    const speed = power * 1.12 * 0.7;
+    const speed = power * 1.12 * 0.8;
     const angle = Math.PI / 4;
     expect(proj.velocity.vx).toBeCloseTo(speed * Math.cos(angle), 5);
     expect(proj.velocity.vy).toBeCloseTo(speed * Math.sin(angle), 5);
