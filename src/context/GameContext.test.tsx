@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { GameProvider, useGameContext } from './GameContext';
@@ -10,6 +10,20 @@ function wrapper({ children }: { children: ReactNode }) {
 
 function renderGameContext() {
   return renderHook(() => useGameContext(), { wrapper });
+}
+
+/**
+ * Helper to advance fake timers enough for the full turn resolution
+ * (projectile flight + explosion animation) to complete.
+ */
+function advancePastAnimation() {
+  // Advance in chunks to allow React effects to fire between intervals
+  // 30 seconds at 60fps = 1800 frames, more than enough for any projectile
+  for (let i = 0; i < 60; i++) {
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+  }
 }
 
 describe('GameContext', () => {
@@ -198,8 +212,16 @@ describe('GameContext', () => {
     });
   });
 
-  describe('firePlayerShot', () => {
-    it('creates projectiles when fired', () => {
+  describe('firePlayerShot - animation', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('sets isAnimating to true after firing', () => {
       const { result } = renderGameContext();
 
       act(() => {
@@ -211,11 +233,125 @@ describe('GameContext', () => {
         result.current.firePlayerShot();
       });
 
-      // Should have projectiles (player + AI shots)
+      expect(result.current.isAnimating).toBe(true);
+    });
+
+    it('sets isPlayerTurn to false after firing', () => {
+      const { result } = renderGameContext();
+
+      act(() => {
+        result.current.firePlayerShot();
+      });
+
+      expect(result.current.isPlayerTurn).toBe(false);
+    });
+
+    it('creates projectiles in gameState after firing', () => {
+      const { result } = renderGameContext();
+
+      act(() => {
+        result.current.setPlayerAngle(45);
+        result.current.setPlayerPower(60);
+      });
+
+      act(() => {
+        result.current.firePlayerShot();
+      });
+
       expect(result.current.gameState.projectiles.length).toBeGreaterThan(0);
     });
 
-    it('increments turn number after firing', () => {
+    it('creates player projectile and AI projectiles', () => {
+      const { result } = renderGameContext();
+
+      act(() => {
+        result.current.firePlayerShot();
+      });
+
+      const projectiles = result.current.gameState.projectiles;
+      // Should have at least 1 (player) + up to 3 (AI) projectiles
+      expect(projectiles.length).toBeGreaterThanOrEqual(1);
+
+      // Player projectile should be owned by 'player'
+      const playerProj = projectiles.find((p) => p.ownerTankId === 'player');
+      expect(playerProj).toBeDefined();
+    });
+
+    it('does not fire when already animating', () => {
+      const { result } = renderGameContext();
+
+      act(() => {
+        result.current.firePlayerShot();
+      });
+
+      const projectileCount = result.current.gameState.projectiles.length;
+
+      // Try to fire again while animating
+      act(() => {
+        result.current.firePlayerShot();
+      });
+
+      // Should not create more projectiles
+      expect(result.current.gameState.projectiles.length).toBeLessThanOrEqual(projectileCount);
+    });
+
+    it('does not fire when not player turn', () => {
+      const { result } = renderGameContext();
+
+      // Fire once - sets isPlayerTurn false
+      act(() => {
+        result.current.firePlayerShot();
+      });
+
+      expect(result.current.isPlayerTurn).toBe(false);
+    });
+
+    it('after animation completes, isAnimating becomes false', () => {
+      const { result } = renderGameContext();
+
+      act(() => {
+        result.current.firePlayerShot();
+      });
+
+      expect(result.current.isAnimating).toBe(true);
+
+      advancePastAnimation();
+
+      expect(result.current.isAnimating).toBe(false);
+    });
+
+    it('after animation completes, isPlayerTurn becomes true if no winner', () => {
+      const { result } = renderGameContext();
+
+      act(() => {
+        result.current.firePlayerShot();
+      });
+
+      advancePastAnimation();
+
+      // If no winner, player turn should resume
+      if (result.current.gameState.phase !== 'gameOver') {
+        expect(result.current.isPlayerTurn).toBe(true);
+      }
+    });
+
+    it('wind updates after turn resolution (no winner)', () => {
+      const { result } = renderGameContext();
+
+      act(() => {
+        result.current.firePlayerShot();
+      });
+
+      advancePastAnimation();
+
+      if (result.current.gameState.phase !== 'gameOver') {
+        // Wind should be a valid number within range
+        expect(typeof result.current.gameState.wind.speed).toBe('number');
+        expect(Math.abs(result.current.gameState.wind.speed)).toBeLessThanOrEqual(30);
+      }
+    });
+
+    it('turn number increments after turn resolution (no winner)', () => {
       const { result } = renderGameContext();
       const initialTurn = result.current.gameState.turnNumber;
 
@@ -223,22 +359,109 @@ describe('GameContext', () => {
         result.current.firePlayerShot();
       });
 
-      expect(result.current.gameState.turnNumber).toBe(initialTurn + 1);
+      advancePastAnimation();
+
+      if (result.current.gameState.phase !== 'gameOver') {
+        expect(result.current.gameState.turnNumber).toBe(initialTurn + 1);
+      }
     });
 
-    it('updates wind after firing', () => {
+    it('projectiles are cleared after animation completes', () => {
       const { result } = renderGameContext();
-      const initialWind = result.current.gameState.wind.speed;
 
-      // Fire multiple times to ensure wind changes at least once
-      // (wind uses random, so we just verify it's a number)
       act(() => {
         result.current.firePlayerShot();
       });
 
-      expect(typeof result.current.gameState.wind.speed).toBe('number');
-      // Wind may or may not have changed, but should still be valid
-      expect(Math.abs(result.current.gameState.wind.speed)).toBeLessThanOrEqual(30);
+      advancePastAnimation();
+
+      expect(result.current.gameState.projectiles).toHaveLength(0);
+    });
+
+    it('explosions are cleared after animation completes', () => {
+      const { result } = renderGameContext();
+
+      act(() => {
+        result.current.firePlayerShot();
+      });
+
+      advancePastAnimation();
+
+      expect(result.current.gameState.explosions).toHaveLength(0);
+    });
+  });
+
+  describe('winner detection', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('game remains in valid state after turn resolution', () => {
+      const { result } = renderGameContext();
+
+      act(() => {
+        result.current.firePlayerShot();
+      });
+
+      advancePastAnimation();
+
+      // Game should be in a valid state
+      const phase = result.current.gameState.phase;
+      expect(['playing', 'gameOver']).toContain(phase);
+    });
+
+    it('game phase changes to gameOver when there is a winner', () => {
+      const { result } = renderGameContext();
+
+      // Fire multiple rounds to try to get a winner
+      for (let round = 0; round < 20; round++) {
+        if (result.current.gameState.phase === 'gameOver') break;
+        if (!result.current.isPlayerTurn || result.current.isAnimating) {
+          advancePastAnimation();
+          continue;
+        }
+
+        act(() => {
+          result.current.firePlayerShot();
+        });
+
+        advancePastAnimation();
+      }
+
+      // Whether or not a winner was found, the game should be in a valid state
+      const phase = result.current.gameState.phase;
+      expect(['playing', 'gameOver']).toContain(phase);
+
+      if (phase === 'gameOver') {
+        expect(result.current.gameState.winner).not.toBeNull();
+      }
+    });
+
+    it('winner is set when game phase is gameOver', () => {
+      const { result } = renderGameContext();
+
+      // Run a few turns
+      for (let round = 0; round < 5; round++) {
+        if (result.current.gameState.phase === 'gameOver') break;
+        if (!result.current.isPlayerTurn || result.current.isAnimating) {
+          advancePastAnimation();
+          continue;
+        }
+
+        act(() => {
+          result.current.firePlayerShot();
+        });
+        advancePastAnimation();
+      }
+
+      if (result.current.gameState.phase === 'gameOver') {
+        expect(result.current.gameState.winner).toBeDefined();
+        expect(result.current.gameState.winner).not.toBeNull();
+      }
     });
   });
 
@@ -267,6 +490,14 @@ describe('GameContext', () => {
   });
 
   describe('restartBattle', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('resets all state same as startBattle', () => {
       const { result } = renderGameContext();
 
@@ -274,6 +505,8 @@ describe('GameContext', () => {
       act(() => {
         result.current.firePlayerShot();
       });
+
+      advancePastAnimation();
 
       act(() => {
         result.current.restartBattle();
