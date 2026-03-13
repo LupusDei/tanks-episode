@@ -1,20 +1,32 @@
 import type { StoredPlayerProfile } from '../types/game';
 
-const DEFAULT_PROFILE: StoredPlayerProfile = {
-  name: '',
-  balance: 0,
-  stats: { gamesPlayed: 0, gamesWon: 0, totalKills: 0 },
-  weaponInventory: { sniper: 0, heavy: 0 },
-};
+const STORAGE_KEY = 'tank-battle-player';
+const DEFAULT_BALANCE = 500;
 
-export function saveProfile(_profile: StoredPlayerProfile): void {
-  // Stub: will persist to localStorage
+export function getDefaultProfile(name: string): StoredPlayerProfile {
+  return {
+    name,
+    balance: DEFAULT_BALANCE,
+    stats: { gamesPlayed: 0, gamesWon: 0, totalKills: 0 },
+    weaponInventory: { sniper: 0, heavy: 0 },
+  };
 }
 
-export function loadProfile(): StoredPlayerProfile {
-  return { ...DEFAULT_PROFILE };
+export function saveProfile(profile: StoredPlayerProfile): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+}
+
+export function loadProfile(): StoredPlayerProfile | null {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (raw === null) return null;
+
+  try {
+    return JSON.parse(raw) as StoredPlayerProfile;
+  } catch {
+    return null;
+  }
 }
 
 export function clearProfile(): void {
-  // Stub: will clear from localStorage
+  localStorage.removeItem(STORAGE_KEY);
 }
