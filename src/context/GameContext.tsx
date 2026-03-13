@@ -1,9 +1,18 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { GameState, TankState, ProjectileState, ExplosionState, TerrainData } from '../types/game';
+import type {
+  GameState,
+  TankState,
+  ProjectileState,
+  ExplosionState,
+  TerrainData,
+  TerrainSize,
+  AIDifficulty,
+  GamePhase,
+} from '../types/game';
 import { generateTerrain } from '../engine/terrain';
 import { carveCrater } from '../engine/terrain';
-import { placeTanks, TANK_COLORS, settleTank } from '../engine/tank';
+import { placeTanks, settleTank } from '../engine/tank';
 import { generateInitialWind, updateWind } from '../engine/wind';
 import { calculateAIShot, selectTarget } from '../engine/ai';
 import { createProjectile, updateProjectile, checkTerrainCollision, checkTankCollision, isOutOfBounds } from '../engine/projectile';
@@ -16,23 +25,33 @@ const MIN_ANGLE = -120;
 const MAX_ANGLE = 120;
 const MIN_POWER = 0;
 const MAX_POWER = 100;
-const DEFAULT_ENEMY_COUNT = 3;
-const DEFAULT_PLAYER_NAME = 'Player';
 const SIMULATION_DT = (1 / 60) * 5; // 5x visual speed multiplier
 const FRAME_INTERVAL_MS = 1000 / 60; // 60fps
 
 // === Types ===
+
+export interface BattleConfig {
+  terrainSize: TerrainSize;
+  enemyCount: number;
+  difficulty: AIDifficulty;
+  playerColor: string;
+  playerName: string;
+}
 
 export interface GameContextValue {
   gameState: GameState;
   isPlayerTurn: boolean;
   isAnimating: boolean;
   playerPower: number;
+  battleConfig: BattleConfig | null;
   setPlayerAngle: (angle: number) => void;
   setPlayerPower: (power: number) => void;
   firePlayerShot: () => void;
-  startBattle: () => void;
-  restartBattle: () => void;
+  goToConfig: () => void;
+  startBattle: (config: BattleConfig) => void;
+  endGame: (winner: TankState) => void;
+  playAgain: () => void;
+  setPhase: (phase: GamePhase) => void;
 }
 
 // === Helpers ===
@@ -62,9 +81,9 @@ function checkWinner(tanks: TankState[]): TankState | null {
   return null;
 }
 
-function initializeBattle(): { gameState: GameState; playerPower: number } {
-  const terrain = generateTerrain('medium');
-  const tanks = placeTanks(terrain, DEFAULT_PLAYER_NAME, TANK_COLORS[0]!, DEFAULT_ENEMY_COUNT);
+function initializeBattle(config: BattleConfig): { gameState: GameState; playerPower: number } {
+  const terrain = generateTerrain(config.terrainSize);
+  const tanks = placeTanks(terrain, config.playerName, config.playerColor, config.enemyCount);
   const wind = generateInitialWind();
 
   return {
@@ -258,11 +277,15 @@ const defaultContextValue: GameContextValue = {
   isPlayerTurn: false,
   isAnimating: false,
   playerPower: 50,
+  battleConfig: null,
   setPlayerAngle: () => {},
   setPlayerPower: () => {},
   firePlayerShot: () => {},
+  goToConfig: () => {},
   startBattle: () => {},
-  restartBattle: () => {},
+  endGame: () => {},
+  playAgain: () => {},
+  setPhase: () => {},
 };
 
 // === Context ===
@@ -277,15 +300,21 @@ export function useGameContext(): GameContextValue {
 
 interface GameProviderProps {
   children: ReactNode;
+  initialPhase?: GamePhase;
 }
 
-export function GameProvider({ children }: GameProviderProps): React.JSX.Element {
-  const [gameState, setGameState] = useState<GameState>(() => initializeBattle().gameState);
-  const [isPlayerTurn, setIsPlayerTurn] = useState(true);
+export function GameProvider({ children, initialPhase = 'nameEntry' }: GameProviderProps): React.JSX.Element {
+  const [gameState, setGameState] = useState<GameState>(() => ({
+    ...defaultGameState,
+    phase: initialPhase,
+  }));
+  const [isPlayerTurn, setIsPlayerTurn] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [playerPower, setPlayerPowerState] = useState(50);
+  const [battleConfig, setBattleConfig] = useState<BattleConfig | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingResolutionRef = useRef(false);
+  const battleConfigRef = useRef<BattleConfig | null>(null);
 
   // Animation loop effect
   useEffect(() => {
@@ -361,6 +390,8 @@ export function GameProvider({ children }: GameProviderProps): React.JSX.Element
       const player = findPlayerTank(prev.tanks);
       if (!player || !prev.terrain) return prev;
 
+      const currentDifficulty = battleConfigRef.current?.difficulty ?? 'veteran';
+
       // Create player projectile
       const playerProjectile = createProjectile(
         player,
@@ -374,7 +405,7 @@ export function GameProvider({ children }: GameProviderProps): React.JSX.Element
       const aiProjectiles = aiTanks.map((aiTank) => {
         const target = selectTarget(aiTank, prev.tanks, null);
         if (!target) return null;
-        const shot = calculateAIShot(aiTank, target, prev.wind, prev.terrain!, 'veteran');
+        const shot = calculateAIShot(aiTank, target, prev.wind, prev.terrain!, currentDifficulty);
         return createProjectile(aiTank, shot.angle, shot.power, shot.weaponType);
       }).filter((p): p is NonNullable<typeof p> => p !== null);
 
@@ -387,43 +418,84 @@ export function GameProvider({ children }: GameProviderProps): React.JSX.Element
     setIsAnimating(true);
   }, [isPlayerTurn, isAnimating, playerPower]);
 
-  const startBattle = useCallback(() => {
+  const goToConfig = useCallback(() => {
+    setGameState((prev) => ({
+      ...prev,
+      phase: 'config',
+    }));
+  }, []);
+
+  const startBattle = useCallback((config: BattleConfig) => {
     if (intervalRef.current !== null) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
     pendingResolutionRef.current = false;
-    const { gameState: newState, playerPower: newPower } = initializeBattle();
+    setBattleConfig(config);
+    battleConfigRef.current = config;
+    const { gameState: newState, playerPower: newPower } = initializeBattle(config);
     setGameState(newState);
     setIsPlayerTurn(true);
     setIsAnimating(false);
     setPlayerPowerState(newPower);
   }, []);
 
-  const restartBattle = useCallback(() => {
-    startBattle();
-  }, [startBattle]);
+  const endGame = useCallback((winner: TankState) => {
+    setGameState((prev) => ({
+      ...prev,
+      phase: 'gameOver',
+      winner,
+      projectiles: [],
+      explosions: [],
+    }));
+    setIsAnimating(false);
+  }, []);
+
+  const playAgain = useCallback(() => {
+    setGameState((prev) => ({
+      ...defaultGameState,
+      phase: 'config',
+      turnNumber: prev.turnNumber,
+    }));
+    setIsPlayerTurn(false);
+    setIsAnimating(false);
+  }, []);
+
+  const setPhase = useCallback((phase: GamePhase) => {
+    setGameState((prev) => ({
+      ...prev,
+      phase,
+    }));
+  }, []);
 
   const value = useMemo<GameContextValue>(() => ({
     gameState,
     isPlayerTurn,
     isAnimating,
     playerPower,
+    battleConfig,
     setPlayerAngle,
     setPlayerPower,
     firePlayerShot,
+    goToConfig,
     startBattle,
-    restartBattle,
+    endGame,
+    playAgain,
+    setPhase,
   }), [
     gameState,
     isPlayerTurn,
     isAnimating,
     playerPower,
+    battleConfig,
     setPlayerAngle,
     setPlayerPower,
     firePlayerShot,
+    goToConfig,
     startBattle,
-    restartBattle,
+    endGame,
+    playAgain,
+    setPhase,
   ]);
 
   return (
