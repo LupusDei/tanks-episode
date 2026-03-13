@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { PlayerStats, StoredPlayerProfile, WeaponInventory } from '../types/game';
 import { loadProfile, saveProfile, getDefaultProfile } from '../services/storage';
@@ -57,18 +57,7 @@ interface UserProviderProps {
 }
 
 export function UserProvider({ children }: UserProviderProps): React.JSX.Element {
-  const [profile, setProfile] = useState<StoredPlayerProfile | null>(null);
-  const initializedRef = useRef(false);
-
-  // Load profile on mount
-  useEffect(() => {
-    if (initializedRef.current) return;
-    initializedRef.current = true;
-    const stored = loadProfile();
-    if (stored) {
-      setProfile(stored);
-    }
-  }, []);
+  const [profile, setProfile] = useState<StoredPlayerProfile | null>(() => loadProfile());
 
   // Auto-save whenever profile changes (skip initial null)
   useEffect(() => {
